@@ -1,0 +1,5 @@
+# Pinned dependencies for Senators Submission Reproduction
+# Python 3.9+
+torch>=2.0.0,<=2.5.0
+numpy>=1.24.0,<=2.3.5
+pandas>=2.0.0,<=2.3.3

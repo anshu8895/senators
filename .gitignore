@@ -62,3 +62,9 @@ __pycache__/
 venv/
 env/
 .DS_Store
+
+# -- external data and intermediate numpy caches ----------------------------------------------
+external_data/
+*.npy
+*.npz
+!norm_stats.npz
