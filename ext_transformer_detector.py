@@ -1,20 +1,22 @@
-"""External Transformer Detector — Trained on Metrica Open Data, Inferred on BAR-ATH.
+"""External Transformer Possession Detector — Team Senators
+Competition: More than a Hack 2027 — Phase 1: Ball Possession
 
-100% COMPLIANT with competition rules:
-- Model trained EXCLUSIVELY on external Metrica Sports open tracking data (Sample Game 1 & Game 2).
-- Continuous physics-based ball trajectory imputation (eliminating 43% missing tracking gaps).
-- ZERO training, fitting, or calibration on the competition match (BAR-ATH) or its ground truth.
-- Competition match used ONLY for inference (model.eval(), no gradients).
-- Fixed random seeds (SEED = 42) for 100% deterministic reproducibility.
+Data Locations & Requirements:
+- Match constants & boundaries: games.py in repository root
+- Competition tracking & video: ./data (or set environment variable MTAH_DATA_DIR)
+- External training data (optional for --retrain): external_data/metrica/data/Sample_Game_1 and Sample_Game_2
+  (cloned from https://github.com/metrica-sports/sample-data)
 
-Pipeline:
-  1. Parse Metrica tracking + events → per-frame possession labels (H/A/D)
-  2. Extract 20 physical features with ball trajectory interpolation (limit=50 frames = 2.0s)
-  3. Train PyTorch Transformer on external labels (or load committed weights for instant reproduction)
-  4. Extract identical features from BAR-ATH competition tracking data
-  5. Run inference → post-process (smoothing + Smart Tagging dead zones) → Senators.csv
+Methodology:
+- Trained on external open tracking and human event data from Metrica Sports (Sample Games 1 & 2).
+- Zero training, fitting, or calibration on the competition match (BAR-ATH) or its ground truth.
+- Linear ball trajectory interpolation (limit=50 frames = 2.0s) for interior missing observations;
+  untracked frames beyond 50 frames fall back to a neutral 50.0m player-to-ball distance.
+- Pre-trained weights committed in ext_transformer_weights.pt (105,795 trainable parameters).
+- Note: Running with --retrain will overwrite ext_transformer_weights.pt and norm_stats.npz.
+- Output: evaluation/results/Senators.csv (199,319 rows)
 
-Author: Senators Team (More than a Hack 2027)
+Author: Senators Team
 """
 
 import os

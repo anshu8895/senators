@@ -4,7 +4,7 @@
 **Organizers:** Metrica Sports, FC Barcelona (Barça Innovation Hub), Mobile World Capital Barcelona  
 **Primary Deliverable:** `evaluation/results/Senators.csv` (199,319 frames)  
 **Public Code Repository:** https://github.com/anshu8895/senators  
-**Public Window Result:** `spellF1 = 0.5161` | `macroF1 = 0.7032` (highest on the public 5-minute sanity-check window)
+**Public Window Result:** `spellF1 = 0.5161` (highest on the public 5-minute sanity-check window) | `macroF1 = 0.7032`
 
 ---
 
@@ -17,12 +17,12 @@ The public sanity-check ground truth covers 7,500 frames (5 minutes of play, 17 
 | **Senators (Our Submission)** | **0.5161** | **0.7032** | 14 | 17.8 s | -9.4 frames | 0.95 |
 | `rule_based_pred` (Our Baseline) | 0.4667 | 0.7187 | 19 | 13.4 s | -9.5 frames | 1.24 |
 | `baseline_smooth125` | 0.4242 | 0.5812 | 16 | 18.5 s | -7.7 frames | 0.81 |
-| `baseline_smooth50` (Contest Floor: 0.2433) | 0.3256 | 0.6207 | 26 | 10.8 s | +4.0 frames | 1.43 |
+| `baseline_smooth50` | 0.3256 | 0.6207 | 26 | 10.8 s | +4.0 frames | 1.43 |
 | `baseline_smooth25` | 0.2868 | 0.6200 | 36 | 7.6 s | +8.2 frames | 1.90 |
 | `baseline_raw` | 0.0378 | 0.5972 | 131 | 2.0 s | -3.1 frames | 6.52 |
 
-- **`spellF1` comparison:** $+21.7\%$ relative gain ($1.22\times$) over the strongest public baseline (`baseline_smooth125` at `0.4242`), and $+112\%$ over the published match floor (`0.2433`).
-- **`macroF1` comparison:** $+13.3\%$ relative gain over the best baseline macro-F1 (`baseline_smooth50` at `0.6207`).
+- **`spellF1` comparison:** $+21.7\%$ relative gain ($1.22\times$) over the strongest public baseline (`baseline_smooth125` at `0.4242`).
+- **`macroF1` comparison:** $+13.3\%$ relative gain over the best organizer baseline (`baseline_smooth50` at `0.6207`). Note that while `rule_based_pred` scores higher on per-frame `macroF1` (`0.7187`), it fragments possessions (`spellF1 = 0.4667`, 19 predicted possessions vs 14 for Senators).
 - **Rule compliance:** 100% of training data was sourced from external open data. Zero frames of the competition match (`BAR-ATH`) were used for training.
 
 ---
@@ -42,12 +42,12 @@ The challenge requires predicting one label per video frame across all 199,319 f
  (Sample Games 1 & 2: 286,162 frames)
                   │
                   ▼
-[External Label Synthesis (H / A / D)]  ──►  [20-D Feature Extractor with Trajectory Imputation]
+[External Label Synthesis (H / A / D)]  ──►  [20-D Feature Extractor with Trajectory Interpolation]
                                                                 │
                                                                 ▼
                                               [PyTorch Transformer Encoder (2 Layers, d=64)]
                                                                 │
-[BAR-ATH Tactical Tracking (199,319 f)] ──►  [Clean Trajectory Imputation & Feature Extraction]
+[BAR-ATH Tactical Tracking (199,319 f)] ──►  [Clean Trajectory Interpolation & Feature Extraction]
                                                                 │
                                                                 ▼
                                               [Inference: P(H), P(A), P(D) Softmax Probabilities]
@@ -59,24 +59,27 @@ The challenge requires predicting one label per video frame across all 199,319 f
 ```
 
 The system operates in three functional stages:
-1. **Trajectory Imputation:** Recovering short tracking dropouts via linear extrapolation.
+1. **Trajectory Interpolation:** Bridging tracking dropouts with a 50-frame lookahead linear interpolation.
 2. **Order-Invariant Feature Extraction:** Compressing 46 anonymous player slots into 20 metric features.
 3. **Temporal Attention & Post-Processing:** Modeling sliding 100-frame (4.0 s) windows with a Transformer, smoothed by a bilateral probability window and constrained by structural match bounds.
 
 ---
 
-### 1.2 Physics-Based Trajectory Imputation
+### 1.2 Linear Trajectory Interpolation (50-Frame Lookahead)
 
-In the raw competition tracking data, **the ball is untracked (`NaN`) on 43.1% of frames (85,831 out of 199,319 frames)** due to camera occlusion, rapid motion blur, and aerial trajectory.
+In the raw competition tracking data, **the ball is untracked (`NaN`) on 43.1% of frames (85,831 out of 199,319 frames)** due to camera occlusion, aerial flight, rapid motion blur, and unplayed intervals.
 
 ```
 Frame t=100 (Pass Origin) ────► Frames 101..129 (Ball Invisible, NaN) ────► Frame t=130 (Reception)
  Ball at (x0, y0)                 Linear Interpolation across <= 50 frames    Ball at (x1, y1)
-                                  Recovers 7,211 frames (8.4% of missing data)
+                                  Recovers 7,211 frames (8.4% of untracked data)
 ```
 
-- **Short-Gap Linear Interpolation ($\Delta t \le 50\text{ frames} = 2.0\text{ s}$):** Between consecutive sightings within 2.0 seconds, ball coordinates are interpolated linearly along planar axes $x$ and $y$. This recovers **7,211 frames (8.4% of missing ball frames)**, restoring continuous physical inputs during rapid pass exchanges. The remaining ~39.4% of match frames remain untracked.
-- **Neutral Stoppage Boundary ($\Delta t > 2.0\text{ s}$):** For gaps exceeding 50 frames, linear interpolation is discontinued. Naive pipelines that fill missing coordinates with `0.0` cause player-to-ball distance to collapse to zero, misleading models into detecting spurious player contact. Our pipeline sets player-to-ball distances to a neutral default of **$50.0\text{ m}$** (unpossessed state) during extended ball absences.
+The pipeline applies `pandas.Series.interpolate(method='linear', limit=50, limit_area='inside')` along planar axes $x$ and $y$:
+- **Mechanism:** For every interior missing gap between two valid sightings, pandas calculates a linear gradient between the start and end coordinates and fills up to the first 50 consecutive frames ($2.0\text{ s}$).
+- **Short gaps ($\Delta t \le 50\text{ frames} = 2.0\text{ s}$):** Completely bridged by the linear path, reconstructing continuous trajectory features during rapid pass sequences.
+- **Extended gaps ($\Delta t > 50\text{ frames}$):** The first 50 frames are filled along the straight line towards the next sighting; the remaining frames 51+ stay empty (`NaN`). Across the entire match, this fills **7,211 frames (8.4% of untracked ball frames)**, covering both live passes and the first 2.0 s of longer stoppages.
+- **Neutral Stoppage Boundary:** For all frames where the ball remains untracked (~39.4% of the match), player-to-ball distance is assigned to a neutral default of **$50.0\text{ m}$** (unpossessed state). This prevents player-to-ball distance from collapsing to zero, which would trigger spurious turnover classifications during extended stoppages.
 
 ---
 
@@ -134,7 +137,7 @@ Softmax Output: [P(Home), P(Away), P(Dead)]
 - **Context Window:** 100 frames ($4.0\text{ s}$).
 - **Encoder Layers:** 2 layers, 4 attention heads, $d_{model} = 64$, feed-forward dimension $d_{ff} = 256$ with ReLU activation.
 - **Classification Head:** 2-layer MLP with GELU non-linearity and Layer Normalization.
-- **Parameter Count:** ~85,000 parameters (compact, preventing overfitting on small tracking corpora).
+- **Trainable Parameter Count:** 105,795 parameters (state dict holds 115,395 elements, of which 9,600 belong to the non-trainable sinusoidal positional encoding buffer).
 
 ---
 
@@ -148,6 +151,7 @@ The competition rules state:
 In accordance with this rule, **no frame of the competition match (`BAR-ATH`) was used during training.**
 
 - **External Dataset:** Metrica Sports Open Tracking and Event Data ([GitHub Repository](https://github.com/metrica-sports/sample-data)).
+- **Annotation Provenance:** Event annotations in Metrica Sample Games 1 & 2 are human annotations produced by professional match analysts at Metrica Sports using video tagging software, not synthetic ML outputs.
 - **Matches Used:**
   - `Sample_Game_1`: 145,006 tracking frames, 1,745 event annotations.
   - `Sample_Game_2`: 141,156 tracking frames, 1,935 event annotations.
@@ -177,18 +181,20 @@ In accordance with this rule, **no frame of the competition match (`BAR-ATH`) wa
 
 ### 2.3 Post-Processing & Engineering Priors
 
-All post-processing parameters were selected as engineering priors in advance based on standard football sequence conventions, rather than tuned against the public 5-minute slice:
+The post-processing smoothing window ($w = \pm 90\text{ frames}$) and short-run threshold ($50\text{ frames}$) were heuristic hyperparameters chosen based on football possession timescales and evaluated on the public 5-minute sanity check, but frozen without fine-tuning on individual possession boundaries to prevent full-match over-segmentation:
 
 1. **Bilateral Probability Rolling Sum ($w = \pm 90\text{ frames}$):**
    A cumulative rolling sum of class probabilities across window $[t - w, t + w]$ (radius $w = 90$ frames = 3.6 s, total span 181 frames = 7.24 s). This serves as a temporal smoothing filter: it smooths intra-possession passing dynamics and tracking dropouts without blurring major team possession transitions (which typically span 10–25 s).
-2. **Micro-Run Absorption Threshold (`min_spell = 50\text{ frames} = 2.0\text{ s}$):**
-   Transient rival incursions lasting under 50 frames ($2.0\text{ s}$) that immediately revert to the previous possessor are treated as contested duels within the existing possession spell and are absorbed into the surrounding team label.
+2. **Micro-Run Handling & Duel Resolution (`min_spell = 50\text{ frames} = 2.0\text{ s}`):**
+   When a continuous live possession run (`H` or `A`) lasts fewer than 50 frames ($2.0\text{ s}$):
+   - **Absorption (`prev == nxt`):** If preceded and succeeded by the same team (e.g. $H \to \text{short } A \to H$), the transient incursion is treated as an unsuccessful tackle or momentary deflection within an ongoing possession spell and absorbed into the surrounding team label ($H$).
+   - **Contested Turnover Transition (`prev != nxt`):** If preceded and succeeded by different labels (e.g. $H \to \text{short } A \to D$ or $H \to \text{short duel} \to A$), the run is converted to **`D` (dead / contested transition)** to avoid arbitrarily attributing contested physical duels or rapid turnovers to either team.
 3. **Restart Dead-Ball Windows:**
-   Stoppage windows applied to Smart Tagging set-piece instances, beginning 2.0 s prior to the logged timestamp to account for whistle latency:
-   - *Throw-in:* 3.0 s dead ball.
-   - *Goal Kick / Kick-off:* 4.0–4.5 s dead ball.
-   - *Corner Kick:* 5.0 s dead ball.
-   - *Free Kick:* 5.5 s dead ball.
+   In Smart Tagging, set-piece timestamps record the approximate instant of restart execution (the kick or throw) rather than the preceding whistle. Each dead-ball window opens 2.0 s prior to the logged timestamp (`p_start = max(0, start_f - 50)`) to encompass pre-restart ball positioning, and runs for a total duration of `matched_dur` (`p_end = p_start + dead_len`):
+   - *Throw-in:* Total length 3.0 s (from `start_f - 2.0s` to `start_f + 1.0s`; dead for 1.0 s post-tagged restart).
+   - *Goal Kick / Kick-off:* Total length 4.0–4.5 s (from `start_f - 2.0s` to `start_f + 2.0–2.5s`).
+   - *Corner Kick:* Total length 5.0 s (from `start_f - 2.0s` to `start_f + 3.0s`).
+   - *Free Kick:* Total length 5.5 s (from `start_f - 2.0s` to `start_f + 3.5s`).
    - *Goal Celebrations:* The entire interval between goal occurrence and subsequent kickoff restart is assigned to `D`.
 4. **Structural Match Zones (Derived dynamically from `games.py`):**
    - Pre-match: frames $0 \dots 11184 \to \text{X}$.
@@ -200,10 +206,25 @@ All post-processing parameters were selected as engineering priors in advance ba
 
 ---
 
+### 2.4 Possession Rules: Loose Balls, Challenges, and Restarts
+
+The competition guidelines require defining where the pipeline draws the line on loose balls, challenges, and restarts:
+
+1. **Loose Balls (Passes in Flight & Aerial Clearances):**
+   When the ball is struck into open space or aerial flight, tracking coordinates often vanish or indicate distance from all players. Possession remains credited to the passing/kicking team throughout the ball flight until an opposing player establishes controlled physical proximity, or until a whistle/stoppage event occurs. The bilateral rolling sum ($w = \pm 90\text{ frames}$) provides temporal inertia that bridges pass flight intervals without dropping possession to neutral midway through an exchange.
+2. **Challenges & 50/50 Duels:**
+   During tackles, loose-ball scrambles, or 50/50 contested duels:
+   - If an opponent makes brief contact ($< 2.0\text{ s}$) but the initiating team retains the ball, possession does not switch (the duel is absorbed into the existing spell).
+   - If the duel results in a clean turnover, the intermediate frames between the two distinct team spells are mapped to `D` (dead / contested), preventing false fractional spell fragmentation.
+3. **Restarts:**
+   During dead-ball intervals (throw-ins, free kicks, goal kicks, corners), the ball is out of play and assigned `D` regardless of player proximity to the ball, preventing premature possession attribution before the ball is legally put into live play.
+
+---
+
 ## 3. Limitations
 
 1. **Persistent Untracked Ball (39.4% of Match):**
-   While short-gap interpolation recovers 7,211 frames (8.4% of missing ball observations), approximately 39.4% of all frames remain without a tracked ball. During prolonged aerial flight or camera occlusions, distance features default to a static 50.0 m boundary, which can introduce transition latency on restarts.
+   While linear interpolation fills 7,211 frames (8.4% of missing ball observations), approximately 39.4% of all frames remain without a tracked ball. During prolonged aerial flight or camera occlusions exceeding 50 frames, distance features default to a static 50.0 m boundary, which can introduce transition latency on restarts.
 2. **Sample Size of Public Validation (17 Possessions):**
    The public ground truth contains only 17 possessions across 5 minutes of play. In a sample of this size, a single boundary disagreement shifts `spellF1` by roughly $\approx 0.06$. As noted in `EVALUATION.md`, bootstrap intervals on this sample are wide, and public performance may not reflect full-match private ranking.
 3. **Limited External Training Volume (2 Matches):**
@@ -219,31 +240,32 @@ All post-processing parameters were selected as engineering priors in advance ba
 
 ## 4. Reproduction Guide
 
-The codebase is deterministic and reproduces the primary submission `evaluation/results/Senators.csv`.
+The codebase reproduces the primary submission `evaluation/results/Senators.csv`.
 
 ### Step 1: Environment Setup
-Install dependencies with pinned version ranges:
+Install pinned dependencies:
 ```bash
 pip install -r requirements-submission.txt
 ```
-*(Dependencies: `torch>=2.0.0,<=2.5.0`, `numpy>=1.24.0,<=2.3.5`, `pandas>=2.0.0,<=2.3.3`)*
+*(Dependencies: `torch==2.5.0`, `numpy==2.3.5`, `pandas==2.3.3`; tested under Python 3.13.9, compatible with Python 3.9+)*
 
 ### Step 2: Run Inference (Zero-Retrain Mode)
+Ensure `games.py` is in the repository root, and match data is placed in `./data` (or pointed to via `MTAH_DATA_DIR`).
 Using the committed model weights (`ext_transformer_weights.pt`) and normalization parameters (`norm_stats.npz`):
 ```bash
 python3 ext_transformer_detector.py
 ```
-- **Runtime:** Measured ~20 seconds on Apple Silicon (M-series, MPS backend) or ~45 seconds on multi-core CPU.
+- **Runtime:** Measured ~20 seconds on Apple Silicon (M-series, MPS backend) or ~45 seconds on multi-core CPU. Predicted output labels are verified identical across both MPS and CPU (max output difference $7.15 \times 10^{-7}$).
 - **Output:** Writes exactly 199,319 rows to `evaluation/results/Senators.csv`.
 
 ### Step 3: (Optional) Retrain from Scratch on External Metrica Data
-To retrain the Transformer model deterministically from raw external data:
+To retrain the Transformer model from raw external data:
 1. Ensure Metrica sample data is present under `external_data/metrica/data/Sample_Game_1` and `Sample_Game_2` (cloned from `https://github.com/metrica-sports/sample-data`).
 2. Run with the `--retrain` flag:
 ```bash
 python3 ext_transformer_detector.py --retrain
 ```
-This retrains the model with `SEED = 42`, overwrites `ext_transformer_weights.pt` and `norm_stats.npz`, and regenerates `evaluation/results/Senators.csv`.
+*Note: Running with `--retrain` will overwrite `ext_transformer_weights.pt` and `norm_stats.npz`. Retraining was conducted on Apple Silicon MPS with `SEED = 42`. While inference is deterministic across devices, retraining on GPU/MPS involves parallel atomic reductions that can introduce slight numerical variations compared to CPU retraining.*
 
 ### Step 4: Validate Submission Format
 ```bash
