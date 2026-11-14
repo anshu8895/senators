@@ -1,5 +1,6 @@
 # Pinned dependencies for Senators Submission Reproduction
-# Python 3.13.9 (tested, compatible with Python 3.9+)
-torch==2.5.0
+# Exact versions that regenerate evaluation/results/Senators.csv byte for byte (checked 2026-11-14).
+# Python 3.13.9. Use a fresh environment: pip install -r requirements-submission.txt
+torch==2.15.0
 numpy==2.3.5
 pandas==2.3.3

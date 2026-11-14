@@ -4,7 +4,7 @@
 **Organizers:** Metrica Sports, FC Barcelona (Barça Innovation Hub), Mobile World Capital Barcelona  
 **Primary Deliverable:** `evaluation/results/Senators.csv` (199,319 frames)  
 **Public Code Repository:** https://github.com/anshu8895/senators  
-**Public Window Result:** `spellF1 = 0.5161` (highest on the public 5-minute sanity-check window) | `macroF1 = 0.7032`
+**Public Window Result:** `spellF1 = 0.5161` | `macroF1 = 0.7032` (public 5-minute sanity-check window: 17 possessions, so one possession is worth about 0.06 `spellF1` and small gaps are within noise)
 
 ---
 
@@ -181,7 +181,7 @@ In accordance with this rule, **no frame of the competition match (`BAR-ATH`) wa
 
 ### 2.3 Post-Processing & Engineering Priors
 
-The post-processing smoothing window ($w = \pm 90\text{ frames}$) and short-run threshold ($50\text{ frames}$) were heuristic hyperparameters chosen based on football possession timescales and evaluated on the public 5-minute sanity check, but frozen without fine-tuning on individual possession boundaries to prevent full-match over-segmentation:
+The post-processing smoothing window ($w = \pm 90\text{ frames}$) and short-run threshold ($50\text{ frames}$) are fixed heuristic constants chosen from football possession timescales. The public 5-minute window was run as a sanity check but cannot discriminate between settings (17 possessions; one possession moves `spellF1` by about 0.06, see `EVALUATION.md`), so these values make no claim of having been selected on it. They were frozen rather than tuned to individual possession boundaries, to prevent full-match over-segmentation:
 
 1. **Bilateral Probability Rolling Sum ($w = \pm 90\text{ frames}$):**
    A cumulative rolling sum of class probabilities across window $[t - w, t + w]$ (radius $w = 90$ frames = 3.6 s, total span 181 frames = 7.24 s). This serves as a temporal smoothing filter: it smooths intra-possession passing dynamics and tracking dropouts without blurring major team possession transitions (which typically span 10–25 s).
@@ -211,7 +211,7 @@ The post-processing smoothing window ($w = \pm 90\text{ frames}$) and short-run 
 The competition guidelines require defining where the pipeline draws the line on loose balls, challenges, and restarts:
 
 1. **Loose Balls (Passes in Flight & Aerial Clearances):**
-   When the ball is struck into open space or aerial flight, tracking coordinates often vanish or indicate distance from all players. Possession remains credited to the passing/kicking team throughout the ball flight until an opposing player establishes controlled physical proximity, or until a whistle/stoppage event occurs. The bilateral rolling sum ($w = \pm 90\text{ frames}$) provides temporal inertia that bridges pass flight intervals without dropping possession to neutral midway through an exchange.
+   When the ball is struck into open space or aerial flight, tracking coordinates often vanish or indicate distance from all players. The submitted pipeline has no explicit pass-flight or ball-control rule: the Transformer sees a 4.0 s window of distance features, and the bilateral rolling sum ($w = \pm 90\text{ frames}$) adds temporal inertia, so possession tends to stay with the passing team through a short flight until evidence for the opponent persists. (The hand-written `rule_based_pred` baseline, not the submission, does implement explicit control-radius and pass-flight rules.)
 2. **Challenges & 50/50 Duels:**
    During tackles, loose-ball scrambles, or 50/50 contested duels:
    - If an opponent makes brief contact ($< 2.0\text{ s}$) but the initiating team retains the ball, possession does not switch (the duel is absorbed into the existing spell).
@@ -224,7 +224,7 @@ The competition guidelines require defining where the pipeline draws the line on
 ## 3. Limitations
 
 1. **Persistent Untracked Ball (39.4% of Match):**
-   While linear interpolation fills 7,211 frames (8.4% of missing ball observations), approximately 39.4% of all frames remain without a tracked ball. During prolonged aerial flight or camera occlusions exceeding 50 frames, distance features default to a static 50.0 m boundary, which can introduce transition latency on restarts.
+   While linear interpolation fills 7,211 frames (8.4% of missing ball observations), approximately 39.4% of all frames remain without a tracked ball. During prolonged aerial flight or camera occlusions exceeding 50 frames, distance features default to a static 50.0 m boundary. The training matches rarely lose the ball while play is live, so the model has learned to read an untracked ball as a dead ball: 73% of all frames the submission labels `D` have no tracked ball, and on the public window it labels 97% of untracked-ball frames `D` although 39% of those frames are live play. Each such false `D` inside a possession can split it in two, which `spellF1` penalises; dead-ball recall (F1 0.49 on the public window) is the weakest class.
 2. **Sample Size of Public Validation (17 Possessions):**
    The public ground truth contains only 17 possessions across 5 minutes of play. In a sample of this size, a single boundary disagreement shifts `spellF1` by roughly $\approx 0.06$. As noted in `EVALUATION.md`, bootstrap intervals on this sample are wide, and public performance may not reflect full-match private ranking.
 3. **Limited External Training Volume (2 Matches):**
@@ -247,7 +247,7 @@ Install pinned dependencies:
 ```bash
 pip install -r requirements-submission.txt
 ```
-*(Dependencies: `torch==2.5.0`, `numpy==2.3.5`, `pandas==2.3.3`; tested under Python 3.13.9, compatible with Python 3.9+)*
+*(Dependencies: `torch==2.15.0`, `numpy==2.3.5`, `pandas==2.3.3`; Python 3.13.9. These exact versions were used to regenerate `Senators.csv` byte for byte on 2026-11-14; other Python or library versions are untested. Run every command below with the interpreter these are installed in.)*
 
 ### Step 2: Run Inference (Zero-Retrain Mode)
 Ensure `games.py` is in the repository root, and match data is placed in `./data` (or pointed to via `MTAH_DATA_DIR`).
@@ -292,3 +292,17 @@ rank  submission                macroF1  spellF1   poss     dur  transF1  lat_f 
    2  rule_based_pred            0.7187   0.4667     19    13.4   0.3556   -9.5  1.24
    3  baseline_smooth125         0.5812   0.4242     16    18.5   0.1667   -7.7  0.81
 ```
+
+### Step 6: (Optional) Held-out check on Metrica Sample Game 3
+
+`metrica_testbed.py` scores the submitted model on Metrica Sample Game 3, which was never used for training, with the official metric code (`evaluation/possession_metrics.py`). Ground truth is derived from Metrica's human event logs (only `PASS`, `RECOVERY` and `SHOT` change possession, following the duel rule in `CHALLENGE.md`), so it is a relative yardstick rather than a prediction of the private score. Smart Tagging does not exist for this game, so only the model and its smoothing are measured. The `bar-ath` condition adds ball gaps drawn from the competition match's own ball-presence run lengths (a label-free statistic) and player dropouts, so the tracking is as incomplete as the competition match's.
+```bash
+python3 metrica_testbed.py --seeds 3
+```
+
+| Condition | `macroF1` | `spellF1` | Possessions (pred / true) | Ball missing |
+| :--- | :---: | :---: | :---: | :---: |
+| `raw` (tracking as delivered) | 0.8466 | 0.5948 | 214 / 324 | 31.7% |
+| `bar-ath` (mean of 3 corruption seeds) | 0.7854 | 0.5138 | 209-218 / 324 | 37.5-38.9% |
+
+Both numbers are from the submitted weights and settings as of 2026-11-14.

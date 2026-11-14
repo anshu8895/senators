@@ -101,13 +101,18 @@ def load_metrica_tracking(game_dir):
     return n_frames, ball_x, ball_y, home_positions, away_positions
 
 
-def generate_possession_labels_from_events(events_path, n_frames):
-    """Convert Metrica event data into per-frame possession labels (H=0, A=1, D=2)."""
-    events = pd.read_csv(events_path)
+def generate_possession_labels_from_events(events_path, n_frames, poss_types=None):
+    """Convert Metrica event data into per-frame possession labels (H=0, A=1, D=2).
+
+    events_path may also be a DataFrame with the same columns (metrica_testbed.py builds one
+    from the Sample Game 3 JSON events). poss_types overrides which event types hand possession to
+    the acting team; the default is the set the shipped weights were trained with.
+    """
+    events = events_path if isinstance(events_path, pd.DataFrame) else pd.read_csv(events_path)
     labels = np.full(n_frames, 2, dtype=np.int64)  # Default = D (dead)
     
     dead_types = {"SET PIECE", "BALL OUT", "CARD"}
-    poss_types = {"PASS", "RECOVERY", "SHOT", "CHALLENGE", "FAULT RECEIVED", "BALL LOST"}
+    poss_types = poss_types or {"PASS", "RECOVERY", "SHOT", "CHALLENGE", "FAULT RECEIVED", "BALL LOST"}
     events = events.sort_values("Start Frame").reset_index(drop=True)
     
     curr_poss = 2
@@ -455,8 +460,11 @@ def infer_transformer(model, features, feat_mean, feat_std, device, n_frames):
 
 # ── PART 4: Post-Processing ──────────────────────────────────────────────────
 
-def post_process(probs, n_frames, smart_tagging_path=None, w=90, min_spell=50):
-    """Apply bilateral probability smoothing, structural zones, and Smart Tagging dead ball windows."""
+def post_process(probs, n_frames, smart_tagging_path=None, w=90, min_spell=50, structural=True):
+    """Apply bilateral probability smoothing, structural zones, and Smart Tagging dead ball windows.
+
+    structural=False skips the BAR-ATH-specific X/D zones, for scoring on other games.
+    """
     # 1. Bilateral rolling window probability smoothing (radius w = 90 frames = 3.6s)
     cum = np.vstack([np.zeros((1, 3)), np.cumsum(probs, axis=0)])
     idx = np.arange(n_frames)
@@ -468,11 +476,12 @@ def post_process(probs, n_frames, smart_tagging_path=None, w=90, min_spell=50):
     labels = np.array([INV_LABEL[p] for p in pred_class])
     
     # 2. Structural match zones (unscored match headers, halftimes, and kickoffs)
-    labels[0 : HALF1_START] = "X"
-    labels[HALFTIME_START : HALF2_START] = "X"
-    labels[HALF2_END + 1 : n_frames] = "X"
-    labels[HALF2_START : HALF2_KICKOFF] = "D"
-    
+    if structural:
+        labels[0 : HALF1_START] = "X"
+        labels[HALFTIME_START : HALF2_START] = "X"
+        labels[HALF2_END + 1 : n_frames] = "X"
+        labels[HALF2_START : HALF2_KICKOFF] = "D"
+
     # 3. Smart Tagging Dead Ball Windows
     if smart_tagging_path and os.path.exists(smart_tagging_path):
         root = ET.parse(smart_tagging_path).getroot()
@@ -528,11 +537,12 @@ def post_process(probs, n_frames, smart_tagging_path=None, w=90, min_spell=50):
             i += 1
             
     # Re-apply structural match zones
-    labels[0 : HALF1_START] = "X"
-    labels[HALFTIME_START : HALF2_START] = "X"
-    labels[HALF2_END + 1 : n_frames] = "X"
-    labels[HALF2_START : HALF2_KICKOFF] = "D"
-    
+    if structural:
+        labels[0 : HALF1_START] = "X"
+        labels[HALFTIME_START : HALF2_START] = "X"
+        labels[HALF2_END + 1 : n_frames] = "X"
+        labels[HALF2_START : HALF2_KICKOFF] = "D"
+
     return labels
 
 
