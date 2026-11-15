@@ -68,3 +68,5 @@ external_data/
 *.npy
 *.npz
 !norm_stats.npz
+!norm_stats_v2.npz
+!norm_stats_v3_*.npz
