@@ -1,5 +1,14 @@
 # More than a Hack 2027 — Phase 1: Ball Possession
 
+## Team Senators: summary
+Frame-level ball possession detection (H/A/dead) for a full LaLiga match from
+noisy automatic tracking where the ball is invisible on ~40% of frames.
+Approach: 28 ball-independent and ball-based features → transformer encoder
+(4 s window, 3-seed ensemble) → Viterbi decoding into whole possessions.
+Trained only on external Metrica open games, with ball-gap patterns simulated
+to match the target match. Public-window spellF1 0.648 vs 0.424 best organiser
+baseline (17-possession window, wide noise band). Full report: Senators.md
+
 **Organised by [Metrica Sports](https://metrica-sports.com), [FC Barcelona](https://www.fcbarcelona.com)
 and the [Mobile World Capital Barcelona](https://www.mwcbarcelona.com)**, at the Talent Arena in Barcelona.
 
